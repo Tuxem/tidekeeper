@@ -838,7 +838,11 @@ class TidalAPI(object):
         last_error = None
         for index, getter in enumerate(chain):
             try:
-                return getter()
+                stream = getter()
+                mismatch = self.__streamQualityMismatch__(stream, quality)
+                if mismatch is not None:
+                    raise mismatch
+                return stream
             except Exception as e:
                 last_error = e
                 if index < len(chain) - 1 and self.__shouldSkipOpenApiFallback__(e):
