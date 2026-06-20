@@ -125,7 +125,12 @@ def getPlaylistPath(playlist):
     return f"{SETTINGS.downloadPath}/{retpath}"
 
 
-def getTrackPath(track, stream, album=None, playlist=None):
+# Extensions getTrackPath may produce; used to probe for an already-downloaded
+# file without fetching the (rate-limited) stream first.
+TRACK_EXTENSION_CANDIDATES = ('.m4a', '.flac', '.mp4')
+
+
+def __renderTrackRelPath__(track, stream, album=None, playlist=None):
     base = './'
     number = str(track.trackNumber).rjust(2, '0')
     if album is not None:
@@ -153,9 +158,6 @@ def getTrackPath(track, stream, album=None, playlist=None):
     albumName = __fixPath__(album.title) if album is not None else ''
     year = __getYear__(album.releaseDate) if album is not None else ''
 
-    # extension
-    extension = __getExtension__(stream)
-
     retpath = SETTINGS.trackFileFormat
     if retpath is None or len(retpath) <= 0:
         retpath = SETTINGS.getDefaultPathFormat(Type.Track)
@@ -176,7 +178,31 @@ def getTrackPath(track, stream, album=None, playlist=None):
     retpath = retpath.strip()
     if __isAtmosStream__(stream) and SETTINGS.audioQuality == AudioQuality.Atmos and not hasStreamIdentifier:
         retpath += " [Dolby Atmos]"
-    return f"{base}/{retpath}{extension}"
+    return f"{base}/{retpath}"
+
+
+def getTrackPath(track, stream, album=None, playlist=None):
+    return __renderTrackRelPath__(track, stream, album, playlist) + __getExtension__(stream)
+
+
+def getTrackPathCandidates(track, album=None, playlist=None):
+    """Predict the on-disk track path(s) without fetching the stream.
+
+    Returns the candidate paths (one per plausible extension) when the
+    configured format is fully determined by track/album metadata, or None when
+    the path depends on stream details (``{StreamQuality}``/``{Codec}`` tokens or
+    the Dolby Atmos suffix) and therefore cannot be known ahead of the stream
+    request.
+    """
+    fmt = SETTINGS.trackFileFormat
+    if fmt is None or len(fmt) <= 0:
+        fmt = SETTINGS.getDefaultPathFormat(Type.Track)
+    if __hasStreamIdentifierToken__(fmt):
+        return None
+    if SETTINGS.audioQuality == AudioQuality.Atmos:
+        return None
+    relpath = __renderTrackRelPath__(track, StreamUrl(), album, playlist)
+    return [relpath + extension for extension in TRACK_EXTENSION_CANDIDATES]
 
 
 def getVideoPath(video, album=None, playlist=None):

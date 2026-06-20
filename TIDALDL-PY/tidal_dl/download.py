@@ -428,6 +428,32 @@ def __skipPath__(path, stream):
     return None
 
 
+def __lyricFilePresent__(trackPath):
+    stem = trackPath.rsplit(".", 1)[0]
+    return any(os.path.exists(stem + extension) for extension in (".lrc", ".txt"))
+
+
+def __localResumeSkipPath__(track, album, playlist):
+    """Return an already-downloaded path for ``track`` without fetching the stream.
+
+    The stream request is rate limited, so re-running a large download (e.g.
+    resuming a setlist) otherwise pays the request interval for every track that
+    is already on disk. When the configured path format is fully determined by
+    track metadata, we can probe the disk first and skip those tracks without a
+    single playback request. Returns None when no local copy is found or when the
+    path can only be known after the stream is fetched.
+    """
+    if not SETTINGS.checkExist:
+        return None
+    candidates = getTrackPathCandidates(track, album, playlist)
+    if not candidates:
+        return None
+    for path in candidates:
+        if aigpy.file.getSize(path) > 0:
+            return path
+    return None
+
+
 def __exportFlacFromContainer__(path, stream):
     if not SETTINGS.saveAsFlac or not __isFlacInM4a__(stream):
         return path
@@ -832,6 +858,16 @@ def downloadTrack(track: Track, album=None, playlist=None, userProgress=None, pa
     partPath = ''
     try:
         __ensureTrackStreamable__(track)
+
+        # Fast resume path: if the file is already on disk and the path is known
+        # from metadata alone, skip before the rate-limited stream request.
+        localSkipPath = __localResumeSkipPath__(track, album, playlist)
+        if localSkipPath is not None:
+            if SETTINGS.lyricFile and not __lyricFilePresent__(localSkipPath):
+                __saveLyricsForTrack__(track, localSkipPath)
+            Printf.success(aigpy.path.getFileName(localSkipPath) + " (skip:already exists!)")
+            return True, ''
+
         stream = __getTrackStream__(track.id)
         path = getTrackPath(track, stream, album, playlist)
         partPath = path + '.part'
