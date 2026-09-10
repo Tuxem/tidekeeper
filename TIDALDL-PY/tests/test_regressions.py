@@ -166,8 +166,36 @@ class CliAuthPathRegressionTests(unittest.TestCase):
 
             self.assertIn("Album [123] [2026]", paths.getAlbumPath(self._album()))
             self.assertIn("Playlist [playlist-uuid]", paths.getPlaylistPath(self._playlist()))
-            self.assertTrue(paths.getTrackPath(self._track(), self._stream(), self._album()).endswith("01 - Artist - Track.m4a"))
+            self.assertTrue(paths.getTrackPath(self._track(), self._stream(), self._album()).endswith("Artist - Track.m4a"))
             self.assertTrue(paths.getVideoPath(self._video()).endswith("01 - Artist - Video.mp4"))
+        finally:
+            for key, value in old_values.items():
+                setattr(paths.SETTINGS, key, value)
+
+    def test_default_track_filename_is_independent_of_playlist_position(self):
+        # The default track format carries no {TrackNumber}, so re-ordering or
+        # de-duplicating a TIDAL playlist does not change the on-disk path and
+        # the "already downloaded" check keeps skipping the file.
+        old_values = {
+            "downloadPath": paths.SETTINGS.downloadPath,
+            "trackFileFormat": paths.SETTINGS.trackFileFormat,
+            "playlistFolderFormat": paths.SETTINGS.playlistFolderFormat,
+            "usePlaylistFolder": paths.SETTINGS.usePlaylistFolder,
+        }
+        try:
+            paths.SETTINGS.downloadPath = "/tmp/tidekeeper"
+            paths.SETTINGS.trackFileFormat = ""
+            paths.SETTINGS.playlistFolderFormat = ""
+            paths.SETTINGS.usePlaylistFolder = True
+
+            track = self._track()
+            track.trackNumberOnPlaylist = 7
+            first = paths.getTrackPath(track, self._stream(), None, self._playlist())
+            track.trackNumberOnPlaylist = 42
+            second = paths.getTrackPath(track, self._stream(), None, self._playlist())
+
+            self.assertEqual(first, second)
+            self.assertTrue(first.endswith("/Artist - Track.m4a"))
         finally:
             for key, value in old_values.items():
                 setattr(paths.SETTINGS, key, value)

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Default track filename format no longer includes `{TrackNumber}` (now `{ArtistName} - {TrackTitle}{ExplicitFlag}`). Playlist track files no longer carry the playlist position, so re-ordering or de-duplicating a TIDAL playlist does not trigger re-downloads. Existing libraries keep their custom `trackFileFormat`; add `{TrackNumber} - ` back if you want the old numbering.
 - Apply the stream request delay to OpenAPI track manifest calls (not only legacy playback endpoints), stop OpenAPI fallback when playback is rate limited, and cap 429 retries to avoid retry storms during bulk downloads.
 - Default `requestIntervalSeconds` is now 3 (raise to 30–60 in settings if TIDAL still returns HTTP 429).
 - OpenAPI lossless manifests now request `FLAC_HIRES` for Max/Master, try `usage=DOWNLOAD` before `PLAYBACK`, and map hi-res responses to the correct stream quality label.

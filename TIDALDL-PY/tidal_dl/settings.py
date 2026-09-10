@@ -50,7 +50,7 @@ class Settings(aigpy.model.ModelBase):
     usePlaylistFolder = True
     albumFolderFormat = R"{ArtistName}/{Flag} {AlbumTitle} [{AlbumID}] [{AlbumYear}]"
     playlistFolderFormat = R"Playlist/{PlaylistName} [{PlaylistUUID}]"
-    trackFileFormat = R"{TrackNumber} - {ArtistName} - {TrackTitle}{ExplicitFlag}"
+    trackFileFormat = R"{ArtistName} - {TrackTitle}{ExplicitFlag}"
     videoFileFormat = R"{VideoNumber} - {ArtistName} - {VideoTitle}{ExplicitFlag}"
 
     def getDefaultPathFormat(self, type: Type):
@@ -59,7 +59,7 @@ class Settings(aigpy.model.ModelBase):
         elif type == Type.Playlist:
             return R"Playlist/{PlaylistName} [{PlaylistUUID}]"
         elif type == Type.Track:
-            return R"{TrackNumber} - {ArtistName} - {TrackTitle}{ExplicitFlag}"
+            return R"{ArtistName} - {TrackTitle}{ExplicitFlag}"
         elif type == Type.Video:
             return R"{VideoNumber} - {ArtistName} - {VideoTitle}{ExplicitFlag}"
         return ""
