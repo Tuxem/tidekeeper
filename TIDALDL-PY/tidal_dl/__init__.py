@@ -14,6 +14,7 @@ import aigpy
 
 from .events import *
 from .settings import *
+from .dedupe import dedupeLibrary
 from .diagnostics import runDoctor
 from .paths import getProfilePath, getTokenPath, openPath
 from .printf import Printf
@@ -39,6 +40,7 @@ def mainCommand():
                                        "help", "version", "gui", "doctor",
                                        "update", "update-gui",
                                        "paths", "open-output",
+                                       "dedupe", "dry-run",
                                        "video-only", "videos-only",
                                        "link=", "output=", "quality=", "quality-priority=", "resolution="
                                    ])
@@ -54,6 +56,8 @@ def mainCommand():
     showPaths = False
     openOutput = False
     videoOnly = False
+    dedupe = False
+    dryRun = False
 
     for opt, val in opts:
         if opt in ('-h', '--help'):
@@ -76,6 +80,12 @@ def mainCommand():
             continue
         if opt in ('--video-only', '--videos-only'):
             videoOnly = True
+            continue
+        if opt == '--dedupe':
+            dedupe = True
+            continue
+        if opt == '--dry-run':
+            dryRun = True
             continue
         if opt == '--update':
             updateInstall = True
@@ -133,6 +143,13 @@ def mainCommand():
 
     if showGui:
         startGui()
+        return
+
+    if dedupe:
+        if not loginByConfig() and not loginByWeb():
+            return
+        Printf.info(LANG.select.SETTING_DOWNLOAD_PATH + ':' + SETTINGS.downloadPath)
+        dedupeLibrary(dryRun)
         return
 
     if link is not None:

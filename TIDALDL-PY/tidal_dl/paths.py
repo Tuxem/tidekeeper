@@ -130,7 +130,7 @@ def getPlaylistPath(playlist):
 TRACK_EXTENSION_CANDIDATES = ('.m4a', '.flac', '.mp4')
 
 
-def __renderTrackRelPath__(track, stream, album=None, playlist=None):
+def __renderTrackRelPath__(track, stream, album=None, playlist=None, trackFormat=None):
     base = './'
     number = str(track.trackNumber).rjust(2, '0')
     if album is not None:
@@ -158,7 +158,7 @@ def __renderTrackRelPath__(track, stream, album=None, playlist=None):
     albumName = __fixPath__(album.title) if album is not None else ''
     year = __getYear__(album.releaseDate) if album is not None else ''
 
-    retpath = SETTINGS.trackFileFormat
+    retpath = trackFormat or SETTINGS.trackFileFormat
     if retpath is None or len(retpath) <= 0:
         retpath = SETTINGS.getDefaultPathFormat(Type.Track)
     hasStreamIdentifier = __hasStreamIdentifierToken__(retpath)
@@ -185,23 +185,26 @@ def getTrackPath(track, stream, album=None, playlist=None):
     return __renderTrackRelPath__(track, stream, album, playlist) + __getExtension__(stream)
 
 
-def getTrackPathCandidates(track, album=None, playlist=None):
+def trackPathNeedsStream(trackFormat=None):
+    """True when the track path cannot be known before the stream is fetched."""
+    fmt = trackFormat or SETTINGS.trackFileFormat
+    if fmt is None or len(fmt) <= 0:
+        fmt = SETTINGS.getDefaultPathFormat(Type.Track)
+    return __hasStreamIdentifierToken__(fmt) or SETTINGS.audioQuality == AudioQuality.Atmos
+
+
+def getTrackPathCandidates(track, album=None, playlist=None, trackFormat=None):
     """Predict the on-disk track path(s) without fetching the stream.
 
     Returns the candidate paths (one per plausible extension) when the
     configured format is fully determined by track/album metadata, or None when
     the path depends on stream details (``{StreamQuality}``/``{Codec}`` tokens or
     the Dolby Atmos suffix) and therefore cannot be known ahead of the stream
-    request.
+    request. ``trackFormat`` replaces the configured track file format.
     """
-    fmt = SETTINGS.trackFileFormat
-    if fmt is None or len(fmt) <= 0:
-        fmt = SETTINGS.getDefaultPathFormat(Type.Track)
-    if __hasStreamIdentifierToken__(fmt):
+    if trackPathNeedsStream(trackFormat):
         return None
-    if SETTINGS.audioQuality == AudioQuality.Atmos:
-        return None
-    relpath = __renderTrackRelPath__(track, StreamUrl(), album, playlist)
+    relpath = __renderTrackRelPath__(track, StreamUrl(), album, playlist, trackFormat)
     return [relpath + extension for extension in TRACK_EXTENSION_CANDIDATES]
 
 

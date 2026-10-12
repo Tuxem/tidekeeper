@@ -154,6 +154,22 @@ instead of downloading it again, so the copies share their disk space. On
 filesystems without hard links (FAT/exFAT, Android shared storage) the file is
 copied locally instead. Turn this off with **Link duplicate tracks** in settings.
 
+To apply this to a library downloaded before the index existed, run:
+
+```bash
+tidekeeper --dedupe --dry-run   # show what would change, write nothing
+tidekeeper --dedupe
+```
+
+It looks up on TIDAL every playlist and album folder found in the download
+folder (they carry their TIDAL id in their name) and records the tracks whose
+files are present, under the current track file format or the former default
+one (`{TrackNumber} - ...`). It then replaces the byte-identical audio files of
+those folders with hard links to a single file, so every path keeps the content
+it had. Copies of a track that differ (another quality, other tags) and files
+that cannot be hard-linked are left as they are and listed. Anything outside
+those folders is never touched.
+
 Legacy command:
 
 ```bash
