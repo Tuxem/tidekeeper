@@ -381,6 +381,28 @@ class TrackDedupTests(unittest.TestCase):
 
         self.assertFalse(target.exists())
 
+    def test_a_parent_folder_swapped_while_linking_drops_the_link(self):
+        source, target = self._path("One"), self._path("Two")
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_bytes(b"audio")
+        real_link = os.link
+        checks = []
+
+        def swap_after_link(*args, **kwargs):
+            real_link(*args, **kwargs)
+            checks.append(True)
+
+        # The first containment check (before linking) passes, the second one fails.
+        answers = iter([True, False])
+        with mock.patch.object(download, "__insideDownloadFolder__", side_effect=lambda path: next(answers)), \
+             mock.patch.object(download.os, "link", side_effect=swap_after_link):
+            with self.assertRaises(OSError):
+                download.__placeExistingCopy__(str(source), str(target), allowCopy=False)
+
+        self.assertTrue(checks)
+        self.assertFalse(target.exists())
+        self.assertEqual(sorted(item.name for item in target.parent.iterdir()), [])
+
     @unittest.skipIf(os.name == "nt", "symlinks need privileges on Windows")
     def test_lyrics_copy_never_writes_through_a_symlink_at_the_target_name(self):
         source, target = self._path("One"), self._path("Two")

@@ -527,6 +527,10 @@ def __placeExistingCopy__(source, target, allowCopy=True):
             linkedStat, sourceStat = os.lstat(tempPath), os.lstat(source)
             if not stat.S_ISREG(linkedStat.st_mode) or not os.path.samestat(linkedStat, sourceStat):
                 raise OSError(f"{source} is not a regular file")
+            # Checked again now that the link exists: a parent folder swapped for a
+            # symlink while linking would show here, and the link is then dropped.
+            if not __insideDownloadFolder__(source):
+                raise OSError(f"{source} is not inside the download folder")
             linked = True
         except (OSError, NotImplementedError, AttributeError):
             if not allowCopy:
