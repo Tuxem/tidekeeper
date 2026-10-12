@@ -474,6 +474,20 @@ def __rememberTrack__(track, path, quality=None):
         logging.warning("Unable to index track %s: %s", trackId, e)
 
 
+def __insideDownloadFolder__(path):
+    """True when ``path`` really lies in the download folder (no symlinked folder leads out of it).
+
+    Checked right before a file is linked or copied from ``path``. A folder swapped
+    for a symlink after this check is the one case left open, as it needs write
+    access to the library, which allows replacing its files anyway.
+    """
+    base = os.path.realpath(SETTINGS.downloadPath or ".")
+    try:
+        return os.path.commonpath([base, os.path.realpath(path)]) == base
+    except ValueError:
+        return False
+
+
 def __copyToNewFile__(source, target):
     """Copy ``source`` to a ``target`` that must not exist, never following a link planted there."""
     noFollow = getattr(os, "O_NOFOLLOW", 0)
@@ -495,6 +509,8 @@ def __placeExistingCopy__(source, target, allowCopy=True):
     stream request and the download in those cases; with ``allowCopy`` off the
     link error is raised instead and ``target`` is left untouched.
     """
+    if not __insideDownloadFolder__(source):
+        raise OSError(f"{source} is not inside the download folder")
     __ensureParentDir__(target)
     tempPath = f"{target}.link.{os.getpid()}.{get_ident()}"
     __removeFile__(tempPath)
@@ -505,10 +521,11 @@ def __placeExistingCopy__(source, target, allowCopy=True):
             if os.link in os.supports_follow_symlinks:
                 os.link(source, tempPath, follow_symlinks=False)
             else:
-                if os.path.islink(source):
-                    raise OSError(f"{source} is a symlink")
                 os.link(source, tempPath)
-            if not stat.S_ISREG(os.lstat(tempPath).st_mode):
+            # Whatever the platform does with symlinks, what was linked must be the
+            # regular file the source path names itself, not what a link points to.
+            linkedStat, sourceStat = os.lstat(tempPath), os.lstat(source)
+            if not stat.S_ISREG(linkedStat.st_mode) or not os.path.samestat(linkedStat, sourceStat):
                 raise OSError(f"{source} is not a regular file")
             linked = True
         except (OSError, NotImplementedError, AttributeError):

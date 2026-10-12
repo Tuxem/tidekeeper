@@ -354,6 +354,34 @@ class TrackDedupTests(unittest.TestCase):
                 self.assertEqual(sorted(item.name for item in target.parent.iterdir()) if target.parent.exists() else [], [])
 
     @unittest.skipIf(os.name == "nt", "symlinks need privileges on Windows")
+    def test_a_symlink_source_is_refused_on_platforms_whose_link_follows_symlinks(self):
+        secret = self.root / "secret.txt"
+        secret.write_text("secret", encoding="utf-8")
+        source, target = self._path("One"), self._path("Two")
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.symlink_to(secret)
+
+        with mock.patch.object(download.os, "supports_follow_symlinks", set()):
+            with self.assertRaises(OSError):
+                download.__placeExistingCopy__(str(source), str(target))
+
+        self.assertFalse(target.exists())
+        self.assertEqual(sorted(item.name for item in target.parent.iterdir()) if target.parent.exists() else [], [])
+
+    @unittest.skipIf(os.name == "nt", "symlinks need privileges on Windows")
+    def test_a_source_behind_a_symlinked_folder_leading_out_of_the_library_is_refused(self):
+        outside = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(outside, ignore_errors=True))
+        (outside / "a.flac").write_bytes(b"outside")
+        (self.root / "Playlist").symlink_to(outside, target_is_directory=True)
+        target = self.root / "Other" / "a.flac"
+
+        with self.assertRaises(OSError):
+            download.__placeExistingCopy__(str(self.root / "Playlist" / "a.flac"), str(target))
+
+        self.assertFalse(target.exists())
+
+    @unittest.skipIf(os.name == "nt", "symlinks need privileges on Windows")
     def test_lyrics_copy_never_writes_through_a_symlink_at_the_target_name(self):
         source, target = self._path("One"), self._path("Two")
         for path in (source, target):
