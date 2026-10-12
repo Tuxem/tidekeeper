@@ -481,7 +481,9 @@ def __insideDownloadFolder__(path):
     for a symlink after this check is the one case left open, as it needs write
     access to the library, which allows replacing its files anyway.
     """
-    base = os.path.realpath(SETTINGS.downloadPath or ".")
+    if not SETTINGS.downloadPath:
+        return False
+    base = os.path.realpath(SETTINGS.downloadPath)
     try:
         return os.path.commonpath([base, os.path.realpath(path)]) == base
     except ValueError:

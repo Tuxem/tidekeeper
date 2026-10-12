@@ -381,6 +381,15 @@ class TrackDedupTests(unittest.TestCase):
 
         self.assertFalse(target.exists())
 
+    def test_without_a_download_folder_nothing_is_reused(self):
+        source = self._path("One")
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_bytes(b"audio")
+        with mock.patch.object(download.SETTINGS, "downloadPath", ""):
+            self.assertFalse(download.__insideDownloadFolder__(str(source)))
+            with self.assertRaises(OSError):
+                download.__placeExistingCopy__(str(source), str(self.root / "Two" / "a.flac"))
+
     def test_a_parent_folder_swapped_while_linking_drops_the_link(self):
         source, target = self._path("One"), self._path("Two")
         source.parent.mkdir(parents=True, exist_ok=True)
