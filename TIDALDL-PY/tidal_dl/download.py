@@ -12,6 +12,7 @@
 import logging
 import os
 import shutil
+import stat
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -475,10 +476,14 @@ def __rememberTrack__(track, path, quality=None):
 
 def __copyToNewFile__(source, target):
     """Copy ``source`` to a ``target`` that must not exist, never following a link planted there."""
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
-    descriptor = os.open(target, flags, 0o666)
-    with os.fdopen(descriptor, "wb") as output, open(source, "rb") as origin:
-        shutil.copyfileobj(origin, output, 1024 * 1024)
+    noFollow = getattr(os, "O_NOFOLLOW", 0)
+    binary = getattr(os, "O_BINARY", 0)
+    # The source is opened first and without following a link, so a file swapped
+    # for a symlink after the index lookup is refused rather than read.
+    with os.fdopen(os.open(source, os.O_RDONLY | noFollow | binary), "rb") as origin:
+        descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | noFollow | binary, 0o666)
+        with os.fdopen(descriptor, "wb") as output:
+            shutil.copyfileobj(origin, output, 1024 * 1024)
     shutil.copystat(source, target)
 
 
@@ -495,11 +500,21 @@ def __placeExistingCopy__(source, target, allowCopy=True):
     __removeFile__(tempPath)
     try:
         try:
-            os.link(source, tempPath)
+            # Link the file itself, never what a symlink points to: a source
+            # swapped for a symlink shows up as a link below and is refused.
+            if os.link in os.supports_follow_symlinks:
+                os.link(source, tempPath, follow_symlinks=False)
+            else:
+                if os.path.islink(source):
+                    raise OSError(f"{source} is a symlink")
+                os.link(source, tempPath)
+            if not stat.S_ISREG(os.lstat(tempPath).st_mode):
+                raise OSError(f"{source} is not a regular file")
             linked = True
         except (OSError, NotImplementedError, AttributeError):
             if not allowCopy:
                 raise
+            __removeFile__(tempPath)
             __copyToNewFile__(source, tempPath)
             linked = False
         os.replace(tempPath, target)
@@ -515,7 +530,15 @@ def __copyLyricFile__(sourceTrackPath, targetTrackPath):
     for extension in (".lrc", ".txt"):
         if aigpy.file.getSize(sourceStem + extension) > 0:
             try:
-                shutil.copyfile(sourceStem + extension, targetStem + extension)
+                # Replace rather than write through: the target name may be a symlink.
+                tempPath = f"{targetStem}{extension}.lyr.{os.getpid()}.{get_ident()}"
+                __removeFile__(tempPath)
+                try:
+                    __copyToNewFile__(sourceStem + extension, tempPath)
+                    os.replace(tempPath, targetStem + extension)
+                except Exception:
+                    __removeFile__(tempPath)
+                    raise
                 return True
             except OSError as e:
                 logging.info("Unable to copy lyrics file for %s: %s", targetTrackPath, e)

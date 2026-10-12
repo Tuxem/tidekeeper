@@ -235,6 +235,28 @@ class LibraryDedupeTests(unittest.TestCase):
         self.assertEqual(second.read_bytes(), b"flac-bytes")
         self.assertEqual([item.name for item in second.parent.iterdir()], ["Artist - Track.flac"])
 
+    @unittest.skipIf(os.name == "nt", "symlinks need privileges on Windows")
+    def test_symlinks_are_never_replaced_or_followed(self):
+        first, second = self._two_playlists()
+        outside = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(outside, ignore_errors=True))
+        (outside / "Artist - Track.flac").write_bytes(b"flac-bytes")
+        link = self.root / f"Playlist/One [{UUID_ONE}]/Linked.flac"
+        link.symlink_to(outside / "Artist - Track.flac")
+        # a TIDAL-looking folder that is only a symlink to somewhere else
+        (outside / "elsewhere").mkdir()
+        (outside / "elsewhere" / "Artist - Track.flac").write_bytes(b"flac-bytes")
+        folder = self.root / f"Playlist/Three [33333333-3333-4333-8333-333333333333]"
+        folder.symlink_to(outside / "elsewhere", target_is_directory=True)
+
+        dedupe.dedupeLibrary()
+
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(os.path.realpath(link), os.path.realpath(outside / "Artist - Track.flac"))
+        self.assertFalse(os.path.samefile(first, outside / "elsewhere" / "Artist - Track.flac"))
+        self.assertFalse(os.path.samefile(first, outside / "Artist - Track.flac"))
+        self.assertTrue(os.path.samefile(first, second))
+
     def test_files_outside_tidal_folders_are_never_touched(self):
         first, second = self._two_playlists()
         personal = self._file("Adele/25 (2015) [FLAC]/Artist - Track.flac")

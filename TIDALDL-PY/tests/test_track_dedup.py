@@ -124,6 +124,14 @@ class TrackIndexTests(unittest.TestCase):
 
         self.assertEqual(trackindex.findTrackCopies(str(self.root), 456), [(str(inside), "HIGH")])
 
+    @unittest.skipIf(os.name == "nt", "symlinks need privileges on Windows")
+    def test_a_symlink_is_not_a_copy_even_when_it_stays_inside_the_library(self):
+        real = self._file("real/a.flac")
+        (self.root / "alias.flac").symlink_to(real)
+        trackindex.registerTrack(str(self.root), 456, str(self.root / "alias.flac"), "HIGH")
+
+        self.assertEqual(trackindex.findTrackCopies(str(self.root), 456), [])
+
 
 class TrackDedupTests(unittest.TestCase):
     def setUp(self):
@@ -327,6 +335,39 @@ class TrackDedupTests(unittest.TestCase):
 
         self.assertEqual(victim.read_text(encoding="utf-8"), "keep me")
         self.assertFalse(second.exists())
+
+    @unittest.skipIf(os.name == "nt", "symlinks need privileges on Windows")
+    def test_a_source_swapped_for_a_symlink_is_refused(self):
+        secret = self.root / "secret.txt"
+        secret.write_text("secret", encoding="utf-8")
+        source, target = self._path("One"), self._path("Two")
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.symlink_to(secret)
+
+        for link_error in (None, OSError("Operation not permitted")):
+            with self.subTest(copy_fallback=link_error is not None):
+                patch = mock.patch.object(download.os, "link", side_effect=link_error) if link_error else mock.MagicMock()
+                with patch:
+                    with self.assertRaises(OSError):
+                        download.__placeExistingCopy__(str(source), str(target))
+                self.assertFalse(target.exists())
+                self.assertEqual(sorted(item.name for item in target.parent.iterdir()) if target.parent.exists() else [], [])
+
+    @unittest.skipIf(os.name == "nt", "symlinks need privileges on Windows")
+    def test_lyrics_copy_never_writes_through_a_symlink_at_the_target_name(self):
+        source, target = self._path("One"), self._path("Two")
+        for path in (source, target):
+            path.parent.mkdir(parents=True, exist_ok=True)
+        source.with_suffix(".lrc").write_text("[00:01.00] line", encoding="utf-8")
+        victim = self.root / "victim.txt"
+        victim.write_text("keep me", encoding="utf-8")
+        target.with_suffix(".lrc").symlink_to(victim)
+
+        self.assertTrue(download.__copyLyricFile__(str(source), str(target)))
+
+        self.assertEqual(victim.read_text(encoding="utf-8"), "keep me")
+        self.assertFalse(target.with_suffix(".lrc").is_symlink())
+        self.assertEqual(target.with_suffix(".lrc").read_text(encoding="utf-8"), "[00:01.00] line")
 
     def test_disabled_setting_downloads_again_and_writes_no_index(self):
         download.SETTINGS.linkDuplicateTracks = False

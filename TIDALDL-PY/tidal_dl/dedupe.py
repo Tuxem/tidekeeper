@@ -69,7 +69,7 @@ def __findFolders__(root, patterns):
             return
         for entry in entries:
             match = patterns[depth].fullmatch(entry.name)
-            if match is None or not entry.is_dir():
+            if match is None or not entry.is_dir(follow_symlinks=False):
                 continue
             walk(entry.path, depth + 1, match.groupdict().get("id") or foundId)
 
@@ -192,6 +192,16 @@ def __spelling__(name):
     return unicodedata.normalize("NFC", name).casefold()
 
 
+def __isPlainFile__(path, root):
+    """True for a file that is not a symlink and sits in a folder really inside ``root``."""
+    base = os.path.realpath(root)
+    try:
+        return (not os.path.islink(path)
+                and os.path.commonpath([base, os.path.realpath(os.path.dirname(path))]) == base)
+    except ValueError:
+        return False
+
+
 def __audioFiles__(folder):
     files = []
     for parent, _, names in os.walk(folder):
@@ -228,8 +238,9 @@ def linkDuplicates(paths, dryRun=False):
 
     bySize = {}
     for path in sorted({os.path.abspath(path) for path in paths}):
-        # A symlink stands for a file elsewhere; replacing it would not free anything.
-        if os.path.islink(path):
+        # A symlink, or a file reached through a symlinked folder, stands for something
+        # elsewhere: never replace it, and never link a file from outside the library.
+        if not __isPlainFile__(path, root):
             continue
         size = aigpy.file.getSize(path)
         if size > 0:

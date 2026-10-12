@@ -56,7 +56,9 @@ def __fromStored__(root, stored):
     except ValueError:
         # Windows: another drive than the download folder.
         inside = False
-    return path if inside else None
+    # A file swapped for a symlink after this check is refused when it is opened
+    # or linked (see download.__placeExistingCopy__).
+    return path if inside and not os.path.islink(path) else None
 
 
 def __load__(root):
