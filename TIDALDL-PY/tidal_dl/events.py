@@ -63,10 +63,12 @@ def start_artist(obj: Artist, videoOnly=False):
 def start_playlist(obj: Playlist, videoOnly=False):
     Printf.playlist(obj)
     tracks, videos = TIDAL_API.getItems(obj.uuid, Type.Playlist)
+    success = True
     if not videoOnly:
-        downloadTracks(tracks, None, obj)
+        success = downloadTracks(tracks, None, obj)
     if videoOnly or SETTINGS.downloadVideos:
-        downloadVideos(videos, None, obj)
+        success = downloadVideos(videos, None, obj) and success
+    return success
 
 
 def start_mix(obj: Mix, videoOnly=False):

@@ -264,6 +264,14 @@ def getProfilePath():
     return __getHomePath__() + '/.tidal-dl.json'
 
 
+def getSetlistsPath():
+    return __getHomePath__() + '/.tidal-dl.setlists.json'
+
+
+def getSyncLogPath():
+    return __getHomePath__() + '/.tidal-dl.sync.log'
+
+
 def getConfigDirectory():
     return os.path.dirname(getProfilePath()) or os.path.abspath("./")
 
@@ -275,6 +283,8 @@ def getPathSummary():
         ("Settings file", getProfilePath()),
         ("Token file", getTokenPath()),
         ("Log file", getLogPath()),
+        ("Setlists file", getSetlistsPath()),
+        ("Sync log file", getSyncLogPath()),
     ]
 
 

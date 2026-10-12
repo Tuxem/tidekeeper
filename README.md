@@ -170,6 +170,28 @@ it had. Copies of a track that differ (another quality, other tags) and files
 that cannot be hard-linked are left as they are and listed. Anything outside
 those folders is never touched.
 
+To keep playlists (setlists) up to date, register them once and let cron sync
+them every day:
+
+```bash
+tidekeeper --setlist-add "https://tidal.com/browse/playlist/<uuid>"
+tidekeeper --setlist-list
+tidekeeper --sync               # download what is new in every registered setlist
+tidekeeper --schedule 03:30     # run --sync every day at 03:30 (cron)
+tidekeeper --unschedule
+tidekeeper --setlist-remove "<url, id or title>"
+```
+
+The list is stored in `~/.tidal-dl.setlists.json`. `--sync` never asks for a web
+login (log in once with `tidekeeper`; an expired token is refreshed on its own),
+skips tracks already on disk without any playback request, and exits non-zero if
+a setlist or some of its tracks failed, so cron mail or monitoring can catch it.
+Two syncs never overlap, and the output of scheduled runs goes to
+`~/.tidal-dl.sync.log`. Tracks removed from a TIDAL playlist, and setlists you
+unregister, are never deleted from disk. `--schedule` edits your user crontab
+(one line marked `# tidekeeper-sync`); on Windows use Task Scheduler to run
+`tidekeeper --sync`.
+
 Legacy command:
 
 ```bash

@@ -18,6 +18,8 @@ from .dedupe import dedupeLibrary
 from .diagnostics import runDoctor
 from .paths import getProfilePath, getTokenPath, openPath
 from .printf import Printf
+from .setlists import (addSetlist, printSetlists, removeSetlist, scheduleSync, syncSetlists,
+                       unscheduleSync)
 from .updater import run_update
 
 
@@ -41,6 +43,8 @@ def mainCommand():
                                        "update", "update-gui",
                                        "paths", "open-output",
                                        "dedupe", "dry-run",
+                                       "setlist-add=", "setlist-remove=", "setlist-list",
+                                       "sync", "schedule=", "unschedule",
                                        "video-only", "videos-only",
                                        "link=", "output=", "quality=", "quality-priority=", "resolution="
                                    ])
@@ -58,6 +62,12 @@ def mainCommand():
     videoOnly = False
     dedupe = False
     dryRun = False
+    setlistAdd = []
+    setlistRemove = []
+    setlistList = False
+    sync = False
+    schedule = None
+    unschedule = False
 
     for opt, val in opts:
         if opt in ('-h', '--help'):
@@ -86,6 +96,24 @@ def mainCommand():
             continue
         if opt == '--dry-run':
             dryRun = True
+            continue
+        if opt == '--setlist-add':
+            setlistAdd.append(val)
+            continue
+        if opt == '--setlist-remove':
+            setlistRemove.append(val)
+            continue
+        if opt == '--setlist-list':
+            setlistList = True
+            continue
+        if opt == '--sync':
+            sync = True
+            continue
+        if opt == '--schedule':
+            schedule = val
+            continue
+        if opt == '--unschedule':
+            unschedule = True
             continue
         if opt == '--update':
             updateInstall = True
@@ -137,6 +165,33 @@ def mainCommand():
         updateTidekeeper(updateGuiInstall)
         return
 
+    if setlistRemove or setlistList or schedule is not None or unschedule:
+        code = 0
+        for item in setlistRemove:
+            try:
+                Printf.success("Removed setlist: " + str(removeSetlist(item).get("title") or item))
+            except ValueError as e:
+                Printf.err(str(e))
+                code = 1
+        if setlistList:
+            printSetlists()
+        if schedule is not None:
+            try:
+                Printf.success("Daily sync scheduled: " + scheduleSync(schedule))
+            except (ValueError, RuntimeError, OSError) as e:
+                Printf.err(str(e))
+                code = 1
+        if unschedule:
+            try:
+                if unscheduleSync():
+                    Printf.success("Daily sync unscheduled.")
+                else:
+                    Printf.info("No daily sync was scheduled.")
+            except (RuntimeError, OSError) as e:
+                Printf.err(str(e))
+                code = 1
+        return code
+
     if not aigpy.path.mkdirs(SETTINGS.downloadPath):
         Printf.err(LANG.select.MSG_PATH_ERR + SETTINGS.downloadPath)
         return
@@ -144,6 +199,27 @@ def mainCommand():
     if showGui:
         startGui()
         return
+
+    if sync:
+        # Runs from cron: never wait for a web login, just say how to fix it.
+        if not loginByConfig():
+            Printf.err("Not logged in. Run tidekeeper once interactively to log in, then retry.")
+            return 1
+        Printf.info(LANG.select.SETTING_DOWNLOAD_PATH + ':' + SETTINGS.downloadPath)
+        return syncSetlists()
+
+    if setlistAdd:
+        if not loginByConfig() and not loginByWeb():
+            return 1
+        code = 0
+        for item in setlistAdd:
+            try:
+                entry = addSetlist(item)
+                Printf.success(f"Registered setlist: {entry['title']} [{entry['uuid']}]")
+            except Exception as e:
+                Printf.err(f"{item}: {e}")
+                code = 1
+        return code
 
     if dedupe:
         if not loginByConfig() and not loginByWeb():
@@ -221,8 +297,7 @@ def main():
     TIDAL_API.apiKey = apiKey.getItem(SETTINGS.apiKeyIndex)
 
     if len(sys.argv) > 1:
-        mainCommand()
-        return
+        return mainCommand()
 
     if not loginByConfig():
         loginByWeb()
