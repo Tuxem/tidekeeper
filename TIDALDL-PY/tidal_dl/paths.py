@@ -268,6 +268,10 @@ def getSetlistsPath():
     return __getHomePath__() + '/.tidal-dl.setlists.json'
 
 
+def getSetlistsFilePath():
+    return __getHomePath__() + '/.tidal-dl.setlists.txt'
+
+
 def getSyncLogPath():
     return __getHomePath__() + '/.tidal-dl.sync.log'
 
@@ -284,6 +288,7 @@ def getPathSummary():
         ("Token file", getTokenPath()),
         ("Log file", getLogPath()),
         ("Setlists file", getSetlistsPath()),
+        ("Setlists list file", getSetlistsFilePath()),
         ("Sync log file", getSyncLogPath()),
     ]
 

@@ -182,7 +182,23 @@ tidekeeper --unschedule
 tidekeeper --setlist-remove "<url, id or title>"
 ```
 
-The list is stored in `~/.tidal-dl.setlists.json`. `--sync` never asks for a web
+Setlists can also be kept in a plain text file, one playlist URL or id per line
+(blank lines and `#` comments are ignored), which is easy to edit by hand:
+
+```text
+# ~/.tidal-dl.setlists.txt
+https://tidal.com/browse/playlist/<uuid>   # morning mix
+<uuid>
+```
+
+`--sync` reads `~/.tidal-dl.setlists.txt` when it exists and syncs its playlists
+along with the registered ones (a playlist in both is synced once). Use
+`--setlist-file PATH` with `--sync`, `--setlist-list` or `--schedule` to read
+another file instead; `--schedule` keeps that path in the cron line. A line that
+is not a playlist makes the run exit non-zero, but the other lines are still
+synced.
+
+The registered list is stored in `~/.tidal-dl.setlists.json`. `--sync` never asks for a web
 login (log in once with `tidekeeper`; an expired token is refreshed on its own),
 skips tracks already on disk without any playback request, and exits non-zero if
 a setlist or some of its tracks failed, so cron mail or monitoring can catch it.

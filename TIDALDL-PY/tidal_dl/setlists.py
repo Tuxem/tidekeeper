@@ -3,8 +3,9 @@
 '''
 @File    :   setlists.py
 @Desc    :   A list of TIDAL playlists (setlists) to keep up to date: register
-             them once, then ``--sync`` downloads whatever is new in each one,
-             and ``--schedule`` has cron run that every day.
+             them once (or write them one per line in a list file), then
+             ``--sync`` downloads whatever is new in each one, and ``--schedule``
+             has cron run that every day.
 '''
 import json
 import logging
@@ -18,13 +19,14 @@ from contextlib import contextmanager
 
 from .enums import Type
 from .events import start_playlist
-from .paths import getSetlistsPath, getSyncLogPath
+from .paths import getSetlistsFilePath, getSetlistsPath, getSyncLogPath
 from .printf import Printf
 from .settings import SETTINGS
 from .tidal import TIDAL_API
 
 UUID_PATTERN = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 CRON_MARKER = "# tidekeeper-sync"
+COMMENT_PATTERN = re.compile(r"(^|\s)#.*$")
 CRON_TIME_PATTERN = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 
 
@@ -113,15 +115,57 @@ def removeSetlist(text):
     return matches[0]
 
 
-def printSetlists():
+def readSetlistsFile(filePath=None):
+    """Return ``(lineNumber, text)`` for each setlist of a list file, one per line.
+
+    Blank lines and ``#`` comments (a whole line, or after the URL) are ignored.
+    Without ``filePath`` the default list file is used, and may not exist; a file
+    asked for by name must exist.
+    """
+    path = filePath or getSetlistsFilePath()
+    try:
+        with open(path, "r", encoding="utf-8-sig") as source:
+            lines = source.read().splitlines()
+    except FileNotFoundError:
+        if filePath:
+            raise
+        return []
+    entries = []
+    for number, line in enumerate(lines, 1):
+        text = COMMENT_PATTERN.sub("", line).strip()
+        if text:
+            entries.append((number, text))
+    return entries
+
+
+def __fileSetlists__(filePath=None):
+    """Return the playlist UUIDs of the list file and its unusable lines as ``(number, text, error)``."""
+    found, invalid = [], []
+    for number, text in readSetlistsFile(filePath):
+        try:
+            found.append((number, parsePlaylistId(text)))
+        except ValueError as e:
+            invalid.append((number, text, str(e)))
+    return found, invalid
+
+
+def printSetlists(filePath=None):
     items = loadSetlists()
-    if not items:
-        Printf.info("No setlists registered. Add one with: tidekeeper --setlist-add URL")
+    found, invalid = __fileSetlists__(filePath)
+    if not items and not found and not invalid:
+        Printf.info("No setlists registered. Add one with: tidekeeper --setlist-add URL "
+                    f"(or one per line in {filePath or getSetlistsFilePath()})")
         return items
     for item in items:
         status = item.get("lastStatus")
         last = f"last sync {item['lastSync']}: {status}" if item.get("lastSync") else "never synced"
         Printf.info(f"{item.get('title') or item['uuid']} [{item['uuid']}] - {last}")
+    registered = {item["uuid"].lower() for item in items}
+    for number, uuid in found:
+        if uuid.lower() not in registered:
+            Printf.info(f"[{uuid}] - from the list file, line {number}")
+    for number, text, error in invalid:
+        Printf.err(f"List file, line {number}: {error}")
     return items
 
 
@@ -149,12 +193,34 @@ def __syncLock__():
         handle.close()
 
 
-def syncSetlists():
-    """Download what is new in every registered setlist. Returns a process exit code."""
-    items = loadSetlists()
-    if not items:
-        Printf.info("No setlists registered. Add one with: tidekeeper --setlist-add URL")
-        return 0
+def __syncTargets__(filePath=None):
+    """Return the setlists to sync and the number of unusable list file lines.
+
+    The registered setlists come first, then the ones that only appear in the
+    list file. Only registered ones keep their last sync outcome.
+    """
+    targets = [{"uuid": item["uuid"], "title": item.get("title"), "registered": True} for item in loadSetlists()]
+    known = {target["uuid"].lower() for target in targets}
+    found, invalid = __fileSetlists__(filePath)
+    for number, uuid in found:
+        if uuid.lower() not in known:
+            known.add(uuid.lower())
+            targets.append({"uuid": uuid, "title": None, "registered": False})
+    for number, text, error in invalid:
+        Printf.err(f"List file, line {number}: {error}")
+    return targets, len(invalid)
+
+
+def syncSetlists(filePath=None):
+    """Download what is new in every setlist (registered or listed in the list file).
+
+    Returns a process exit code.
+    """
+    targets, invalidLines = __syncTargets__(filePath)
+    if not targets:
+        Printf.info("No setlists registered. Add one with: tidekeeper --setlist-add URL "
+                    f"(or one per line in {filePath or getSetlistsFilePath()})")
+        return 1 if invalidLines else 0
 
     with __syncLock__() as locked:
         if not locked:
@@ -165,40 +231,43 @@ def syncSetlists():
         oldProgress = SETTINGS.showProgress
         if not sys.stdout.isatty():
             SETTINGS.showProgress = False
-        failed = 0
+        failed = invalidLines
         try:
-            Printf.info(f"Sync started {__now__()}: {len(items)} setlists")
-            for item in items:
-                title = item.get("title") or item["uuid"]
+            Printf.info(f"Sync started {__now__()}: {len(targets)} setlists")
+            for target in targets:
+                title = target["title"] or target["uuid"]
                 try:
-                    playlist = TIDAL_API.getPlaylist(item["uuid"])
+                    playlist = TIDAL_API.getPlaylist(target["uuid"])
                     ok = start_playlist(playlist) is not False
                     status = "ok" if ok else "some tracks failed (see failed-tracks.txt)"
                     if playlist.title:
                         title = playlist.title
-                        __updateSetlist__(item["uuid"], title=title)
+                        if target["registered"]:
+                            __updateSetlist__(target["uuid"], title=title)
                 except Exception as e:
                     ok = False
                     status = f"failed: {e}"
                     Printf.err(f"{title}: {e}")
-                __updateSetlist__(item["uuid"], lastSync=__now__(), lastStatus=status)
+                if target["registered"]:
+                    __updateSetlist__(target["uuid"], lastSync=__now__(), lastStatus=status)
                 failed += 0 if ok else 1
         finally:
             SETTINGS.showProgress = oldProgress
 
-    summary = f"Sync finished {__now__()}: {len(items) - failed}/{len(items)} setlists up to date"
+    summary = f"Sync finished {__now__()}: {len(targets) - failed + invalidLines}/{len(targets)} setlists up to date"
     (Printf.success if not failed else Printf.err)(summary)
     return 1 if failed else 0
 
 
-def __syncCommand__():
-    if getattr(sys, "frozen", False):
-        return [sys.executable, "--sync"]
-    return [sys.executable, "-m", "tidal_dl", "--sync"]
+def __syncCommand__(filePath=None):
+    command = [sys.executable, "--sync"] if getattr(sys, "frozen", False) else [sys.executable, "-m", "tidal_dl", "--sync"]
+    if filePath:
+        command += ["--setlist-file", os.path.abspath(filePath)]
+    return command
 
 
-def __cronLine__(hour, minute):
-    command = " ".join(shlex.quote(part) for part in __syncCommand__())
+def __cronLine__(hour, minute, filePath=None):
+    command = " ".join(shlex.quote(part) for part in __syncCommand__(filePath))
     return f"{minute} {hour} * * * {command} >> {shlex.quote(getSyncLogPath())} 2>&1 {CRON_MARKER}"
 
 
@@ -218,16 +287,21 @@ def __withoutSyncLines__(crontab):
     return [line for line in crontab.splitlines() if CRON_MARKER not in line]
 
 
-def scheduleSync(timeText):
-    """Make cron run ``--sync`` every day at ``HH:MM`` (replaces an earlier schedule)."""
+def scheduleSync(timeText, filePath=None):
+    """Make cron run ``--sync`` every day at ``HH:MM`` (replaces an earlier schedule).
+
+    ``filePath`` is a setlist list file to sync along with the registered setlists.
+    """
     match = CRON_TIME_PATTERN.match((timeText or "").strip())
     if match is None:
         raise ValueError(f"Time must look like 03:30, got: {timeText}")
     if os.name == "nt":
         raise RuntimeError("cron is not available on Windows; use Task Scheduler to run: "
-                           + " ".join(__syncCommand__()))
+                           + " ".join(__syncCommand__(filePath)))
+    if filePath and not os.path.isfile(filePath):
+        raise FileNotFoundError(f"Setlist list file not found: {filePath}")
     hour, minute = int(match.group(1)), int(match.group(2))
-    line = __cronLine__(hour, minute)
+    line = __cronLine__(hour, minute, filePath)
     __writeCrontab__("\n".join(__withoutSyncLines__(__readCrontab__()) + [line]) + "\n")
     return line
 

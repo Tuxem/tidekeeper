@@ -21,6 +21,7 @@ class SetlistTests(unittest.TestCase):
         self.messages = []
         patches = [
             mock.patch.object(setlists, "getSetlistsPath", return_value=str(self.root / "setlists.json")),
+            mock.patch.object(setlists, "getSetlistsFilePath", return_value=str(self.root / "setlists.txt")),
             mock.patch.object(setlists.TIDAL_API, "getPlaylist", side_effect=self._get_playlist),
             mock.patch.object(setlists.Printf, "success", side_effect=self.messages.append),
             mock.patch.object(setlists.Printf, "info", side_effect=self.messages.append),
@@ -148,6 +149,81 @@ class SetlistTests(unittest.TestCase):
         self.assertEqual(first, 0)
         self.assertIn("Another sync is already running.", self.messages)
 
+    def _write_list(self, *lines, name="setlists.txt"):
+        path = self.root / name
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return str(path)
+
+    def test_list_file_ignores_blank_lines_and_comments(self):
+        self._write_list(
+            "# my setlists",
+            "",
+            f"https://tidal.com/browse/playlist/{UUID_ONE}   # warmup",
+            f"  {UUID_TWO}  ",
+        )
+        # a UTF-8 byte order mark (Windows editors) must not break the first line
+        path = self.root / "bom.txt"
+        path.write_bytes(b"\xef\xbb\xbf" + f"{UUID_ONE}\n".encode())
+
+        self.assertEqual(setlists.readSetlistsFile(),
+                         [(3, f"https://tidal.com/browse/playlist/{UUID_ONE}"), (4, UUID_TWO)])
+        self.assertEqual(setlists.readSetlistsFile(str(path)), [(1, UUID_ONE)])
+
+    def test_missing_default_list_file_is_empty_but_a_named_one_must_exist(self):
+        self.assertEqual(setlists.readSetlistsFile(), [])
+        with self.assertRaises(FileNotFoundError):
+            setlists.readSetlistsFile(str(self.root / "nope.txt"))
+
+    def test_sync_downloads_the_list_file_setlists_too_without_registering_them(self):
+        setlists.addSetlist(UUID_ONE)
+        self._write_list(UUID_TWO, UUID_ONE)
+        calls = []
+
+        with mock.patch.object(setlists, "start_playlist", side_effect=lambda p: calls.append(p.uuid) or True):
+            code = setlists.syncSetlists()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, [UUID_ONE, UUID_TWO], "a setlist both registered and listed is synced once")
+        self.assertEqual([item["uuid"] for item in setlists.loadSetlists()], [UUID_ONE])
+
+    def test_sync_with_an_explicit_list_file(self):
+        other = self._write_list(UUID_TWO, name="other.txt")
+        calls = []
+
+        with mock.patch.object(setlists, "start_playlist", side_effect=lambda p: calls.append(p.uuid) or True):
+            self.assertEqual(setlists.syncSetlists(other), 0)
+
+        self.assertEqual(calls, [UUID_TWO])
+
+    def test_bad_list_file_lines_fail_the_run_but_not_the_other_lines(self):
+        self._write_list("https://tidal.com/browse/album/123", UUID_TWO)
+        calls = []
+
+        with mock.patch.object(setlists, "start_playlist", side_effect=lambda p: calls.append(p.uuid) or True):
+            code = setlists.syncSetlists()
+
+        self.assertEqual(calls, [UUID_TWO])
+        self.assertEqual(code, 1)
+        self.assertTrue(any("line 1" in str(message) for message in self.messages))
+        self.assertIn("1/1 setlists up to date", self.messages[-1])
+
+    def test_a_list_file_with_only_bad_lines_still_fails(self):
+        self._write_list("nonsense")
+        with mock.patch.object(setlists, "start_playlist") as start:
+            self.assertEqual(setlists.syncSetlists(), 1)
+        start.assert_not_called()
+
+    def test_print_lists_the_file_setlists(self):
+        setlists.addSetlist(UUID_ONE)
+        self._write_list(UUID_ONE, UUID_TWO, "junk")
+
+        setlists.printSetlists()
+
+        text = "\n".join(str(message) for message in self.messages)
+        self.assertIn(f"[{UUID_TWO}] - from the list file, line 2", text)
+        self.assertNotIn(f"[{UUID_ONE}] - from the list file", text)
+        self.assertIn("List file, line 3", text)
+
 
 class ScheduleTests(unittest.TestCase):
     def setUp(self):
@@ -182,6 +258,18 @@ class ScheduleTests(unittest.TestCase):
 
         self.assertEqual(self.written, ["0 1 * * * backup\n" + line + "\n"])
         self.assertEqual(self.written[0].count("tidekeeper-sync"), 1)
+
+    @unittest.skipIf(os.name == "nt", "cron is not used on Windows")
+    def test_schedule_can_bake_in_a_list_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "my setlists.txt")
+            open(path, "w").close()
+
+            line = setlists.scheduleSync("03:05", path)
+
+            self.assertIn("--sync --setlist-file '" + path + "'", line)
+            with self.assertRaises(FileNotFoundError):
+                setlists.scheduleSync("03:05", os.path.join(folder, "missing.txt"))
 
     def test_schedule_rejects_bad_times(self):
         for text in ("25:00", "3:75", "noon", ""):
@@ -222,7 +310,7 @@ class SetlistCommandTests(unittest.TestCase):
     def test_sync_returns_the_sync_result_and_never_starts_a_web_login(self):
         code, sync, _, web, _ = self._run("--sync")
         self.assertEqual(code, 0)
-        sync.assert_called_once_with()
+        sync.assert_called_once_with(None)
         web.assert_not_called()
 
     def test_sync_without_a_saved_login_fails_with_a_non_zero_code(self):
@@ -236,10 +324,27 @@ class SetlistCommandTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual([call.args[0] for call in add.call_args_list], [UUID_ONE, UUID_TWO])
 
+    def test_sync_passes_the_list_file_through(self):
+        code, sync, _, _, _ = self._run("--sync", "--setlist-file", "/tmp/my.txt")
+        self.assertEqual(code, 0)
+        sync.assert_called_once_with("/tmp/my.txt")
+
+    def test_sync_with_an_unreadable_list_file_fails(self):
+        old_argv = sys.argv
+        sys.argv = ["tidekeeper", "--sync", "--setlist-file", "/nonexistent/list.txt"]
+        try:
+            with mock.patch.object(tidal_dl, "loginByConfig", return_value=True), \
+                 mock.patch.object(tidal_dl.aigpy.path, "mkdirs", return_value=True), \
+                 mock.patch.object(setlists.Printf, "err"):
+                code = tidal_dl.mainCommand()
+        finally:
+            sys.argv = old_argv
+        self.assertEqual(code, 1)
+
     def test_list_needs_no_login(self):
         code, _, _, web, listing = self._run("--setlist-list", login=False)
         self.assertEqual(code, 0)
-        listing.assert_called_once_with()
+        listing.assert_called_once_with(None)
         web.assert_not_called()
 
 

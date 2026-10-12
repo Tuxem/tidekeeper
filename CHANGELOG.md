@@ -4,6 +4,8 @@
 
 - A track already downloaded for another playlist or album is now hard-linked into the new folder instead of being downloaded again (copied when the filesystem has no hard links). Downloaded tracks are recorded in `.tidekeeper-tracks.jsonl` in the download folder; New **Link duplicate tracks** setting (`linkDuplicateTracks`, on by default) in the GUI and CLI.
 - Added setlist syncing: `--setlist-add`/`--setlist-remove`/`--setlist-list` keep a list of playlists, `--sync` downloads what is new in each (non-interactive, non-zero exit code on failure, never overlaps), and `--schedule HH:MM`/`--unschedule` manage a daily cron entry.
+- Setlists can be listed in a text file, one playlist URL or id per line (`~/.tidal-dl.setlists.txt`, or `--setlist-file PATH` with `--sync`, `--setlist-list` and `--schedule`); comments with `#` are allowed.
+- Hardened the track index: entries pointing outside the download folder are ignored, and the copy fallback never writes through a symlink planted at its temporary name.
 - Added `tidekeeper --dedupe` (with `--dry-run`) to index the tracks already in the download folder and replace byte-identical duplicate copies with hard links.
 - Default track filename format no longer includes `{TrackNumber}` (now `{ArtistName} - {TrackTitle}{ExplicitFlag}`). Playlist track files no longer carry the playlist position, so re-ordering or de-duplicating a TIDAL playlist does not trigger re-downloads. Existing libraries keep their custom `trackFileFormat`; add `{TrackNumber} - ` back if you want the old numbering.
 - Apply the stream request delay to OpenAPI track manifest calls (not only legacy playback endpoints), stop OpenAPI fallback when playback is rate limited, and cap 429 retries to avoid retry storms during bulk downloads.

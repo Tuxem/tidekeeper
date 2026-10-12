@@ -43,7 +43,7 @@ def mainCommand():
                                        "update", "update-gui",
                                        "paths", "open-output",
                                        "dedupe", "dry-run",
-                                       "setlist-add=", "setlist-remove=", "setlist-list",
+                                       "setlist-add=", "setlist-remove=", "setlist-list", "setlist-file=",
                                        "sync", "schedule=", "unschedule",
                                        "video-only", "videos-only",
                                        "link=", "output=", "quality=", "quality-priority=", "resolution="
@@ -65,6 +65,7 @@ def mainCommand():
     setlistAdd = []
     setlistRemove = []
     setlistList = False
+    setlistFile = None
     sync = False
     schedule = None
     unschedule = False
@@ -105,6 +106,9 @@ def mainCommand():
             continue
         if opt == '--setlist-list':
             setlistList = True
+            continue
+        if opt == '--setlist-file':
+            setlistFile = val
             continue
         if opt == '--sync':
             sync = True
@@ -174,10 +178,14 @@ def mainCommand():
                 Printf.err(str(e))
                 code = 1
         if setlistList:
-            printSetlists()
+            try:
+                printSetlists(setlistFile)
+            except OSError as e:
+                Printf.err(str(e))
+                code = 1
         if schedule is not None:
             try:
-                Printf.success("Daily sync scheduled: " + scheduleSync(schedule))
+                Printf.success("Daily sync scheduled: " + scheduleSync(schedule, setlistFile))
             except (ValueError, RuntimeError, OSError) as e:
                 Printf.err(str(e))
                 code = 1
@@ -206,7 +214,11 @@ def mainCommand():
             Printf.err("Not logged in. Run tidekeeper once interactively to log in, then retry.")
             return 1
         Printf.info(LANG.select.SETTING_DOWNLOAD_PATH + ':' + SETTINGS.downloadPath)
-        return syncSetlists()
+        try:
+            return syncSetlists(setlistFile)
+        except OSError as e:
+            Printf.err(str(e))
+            return 1
 
     if setlistAdd:
         if not loginByConfig() and not loginByWeb():
