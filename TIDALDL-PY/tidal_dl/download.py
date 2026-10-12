@@ -15,7 +15,7 @@ import shutil
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from threading import Lock, local
+from threading import Lock, get_ident, local
 
 import aigpy
 import requests
@@ -23,6 +23,7 @@ import requests
 from .decryption import *
 from .printf import *
 from .tidal import *
+from .trackindex import findTrackCopies, registerTrack
 
 
 DOWNLOAD_TIMEOUT = (5, 60)
@@ -399,6 +400,9 @@ def __encrypted__(stream, srcPath, descPath):
         os.replace(srcPath, descPath)
     else:
         key, nonce = decrypt_security_token(stream.encryptionKey)
+        # decrypt_file rewrites descPath in place; unlink it first so hard links
+        # to the previous file (see __reuseTrackCopy__) keep their content.
+        __removeFile__(descPath)
         decrypt_file(srcPath, descPath, key, nonce)
         os.remove(srcPath)
 
@@ -451,6 +455,118 @@ def __localResumeSkipPath__(track, album, playlist):
     for path in candidates:
         if aigpy.file.getSize(path) > 0:
             return path
+    return None
+
+
+def __linkDuplicateTracks__():
+    return bool(getattr(SETTINGS, 'linkDuplicateTracks', True))
+
+
+def __rememberTrack__(track, path, quality=None):
+    """Index ``path`` as a copy of ``track`` so later downloads can link to it."""
+    trackId = getattr(track, 'id', None)
+    if trackId is None or not __linkDuplicateTracks__():
+        return
+    try:
+        registerTrack(SETTINGS.downloadPath or ".", trackId, path, quality)
+    except Exception as e:
+        logging.warning("Unable to index track %s: %s", trackId, e)
+
+
+def __placeExistingCopy__(source, target, allowCopy=True):
+    """Hard-link ``source`` to ``target``; returns False when it had to be copied.
+
+    Hard links need both paths on one filesystem that supports them (not
+    FAT/exFAT, not Android shared storage). A plain copy still avoids the
+    stream request and the download in those cases; with ``allowCopy`` off the
+    link error is raised instead and ``target`` is left untouched.
+    """
+    __ensureParentDir__(target)
+    tempPath = f"{target}.link.{os.getpid()}.{get_ident()}"
+    __removeFile__(tempPath)
+    try:
+        try:
+            os.link(source, tempPath)
+            linked = True
+        except (OSError, NotImplementedError, AttributeError):
+            if not allowCopy:
+                raise
+            shutil.copy2(source, tempPath)
+            linked = False
+        os.replace(tempPath, target)
+        return linked
+    except Exception:
+        __removeFile__(tempPath)
+        raise
+
+
+def __copyLyricFile__(sourceTrackPath, targetTrackPath):
+    sourceStem = sourceTrackPath.rsplit(".", 1)[0]
+    targetStem = targetTrackPath.rsplit(".", 1)[0]
+    for extension in (".lrc", ".txt"):
+        if aigpy.file.getSize(sourceStem + extension) > 0:
+            try:
+                shutil.copyfile(sourceStem + extension, targetStem + extension)
+                return True
+            except OSError as e:
+                logging.info("Unable to copy lyrics file for %s: %s", targetTrackPath, e)
+    return False
+
+
+def __reuseTrackCopy__(track, targets, stream=None):
+    """Reuse a copy of ``track`` downloaded elsewhere instead of downloading it again.
+
+    The same track in several playlists (or in a playlist and its album) lands
+    in a different folder each time. ``targets`` are the acceptable destination
+    paths, one per extension; the one matching the existing file is hard-linked
+    to it (see ``__placeExistingCopy__``). Returns the new path, or None when
+    there is nothing to reuse.
+
+    Without ``stream`` the destination was predicted from metadata alone, so any
+    copy will do, like the same-folder check in ``__localResumeSkipPath__``,
+    except a Dolby Atmos one, which that prediction never names. With ``stream``
+    the destination may spell out the stream quality, so only a copy recorded
+    with that exact quality is reused.
+    """
+    trackId = getattr(track, 'id', None)
+    if trackId is None or not targets:
+        return None
+    if not SETTINGS.checkExist or not __linkDuplicateTracks__():
+        return None
+
+    wanted = getattr(stream, 'soundQuality', None)
+    try:
+        copies = findTrackCopies(SETTINGS.downloadPath or ".", trackId)
+    except Exception as e:
+        logging.warning("Unable to look up track %s in the track index: %s", trackId, e)
+        return None
+
+    for source, quality in copies:
+        if stream is None:
+            if quality == 'DOLBY_ATMOS':
+                continue
+        elif not wanted or quality != wanted:
+            continue
+
+        extension = os.path.splitext(source)[1].lower()
+        target = next((item for item in targets if os.path.splitext(item)[1].lower() == extension), None)
+        if target is None:
+            continue
+        try:
+            if os.path.exists(target) and os.path.samefile(source, target):
+                continue
+            linked = __placeExistingCopy__(source, target)
+        except Exception as e:
+            logging.warning("Unable to reuse %s for %s: %s", source, target, e)
+            continue
+
+        __rememberTrack__(track, target, quality)
+        if SETTINGS.lyricFile and not __lyricFilePresent__(target):
+            if not __copyLyricFile__(source, target):
+                __saveLyricsForTrack__(track, target)
+        how = "linked to existing copy" if linked else "copied from existing copy"
+        Printf.success(aigpy.path.getFileName(target) + f" ({how})")
+        return target
     return None
 
 
@@ -863,9 +979,16 @@ def downloadTrack(track: Track, album=None, playlist=None, userProgress=None, pa
         # from metadata alone, skip before the rate-limited stream request.
         localSkipPath = __localResumeSkipPath__(track, album, playlist)
         if localSkipPath is not None:
+            __rememberTrack__(track, localSkipPath)
             if SETTINGS.lyricFile and not __lyricFilePresent__(localSkipPath):
                 __saveLyricsForTrack__(track, localSkipPath)
             Printf.success(aigpy.path.getFileName(localSkipPath) + " (skip:already exists!)")
+            return True, ''
+
+        # Not in this folder, but maybe already downloaded for another playlist
+        # or album: link that file here, still without a stream request.
+        localTargets = getTrackPathCandidates(track, album, playlist) if SETTINGS.checkExist else None
+        if __reuseTrackCopy__(track, localTargets) is not None:
             return True, ''
 
         stream = __getTrackStream__(track.id)
@@ -881,9 +1004,17 @@ def downloadTrack(track: Track, album=None, playlist=None, userProgress=None, pa
         # check exist
         skipPath = __skipPath__(path, stream)
         if skipPath is not None:
+            __rememberTrack__(track, skipPath, getattr(stream, 'soundQuality', None))
             if SETTINGS.lyricFile:
                 __saveLyricsForTrack__(track, skipPath)
             Printf.success(aigpy.path.getFileName(skipPath) + " (skip:already exists!)")
+            return True, ''
+
+        # Same as above for paths that are only known once the stream is.
+        reuseTargets = [path]
+        if SETTINGS.saveAsFlac and __isFlacInM4a__(stream):
+            reuseTargets.append(__containerFallbackPath__(path))
+        if __reuseTrackCopy__(track, reuseTargets, stream) is not None:
             return True, ''
 
         # download
@@ -909,6 +1040,7 @@ def downloadTrack(track: Track, album=None, playlist=None, userProgress=None, pa
         # encrypted -> decrypt and remove encrypted file
         __encrypted__(stream, partPath, path)
         path = __exportFlacFromContainer__(path, stream)
+        __rememberTrack__(track, path, getattr(stream, 'soundQuality', None))
 
         # contributors
         try:

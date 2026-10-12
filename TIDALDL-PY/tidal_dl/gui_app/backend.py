@@ -320,6 +320,7 @@ class TidekeeperBackend:
         SETTINGS.downloadDelay = values["downloadDelay"]
         SETTINGS.requestIntervalSeconds = max(0.0, float(values.get("requestIntervalSeconds", 1.0) or 0.0))
         SETTINGS.saveAsFlac = values.get("saveAsFlac", False)
+        SETTINGS.linkDuplicateTracks = values.get("linkDuplicateTracks", True)
         SETTINGS.usePlaylistFolder = values["usePlaylistFolder"]
         SETTINGS.showProgress = values["showProgress"]
         SETTINGS.showTrackInfo = values["showTrackInfo"]
@@ -412,6 +413,7 @@ class DemoBackend(TidekeeperBackend):
         SETTINGS.downloadDelay = True
         SETTINGS.requestIntervalSeconds = 3.0
         SETTINGS.saveAsFlac = False
+        SETTINGS.linkDuplicateTracks = True
         SETTINGS.usePlaylistFolder = True
 
     def auth_status(self) -> AuthStatus:

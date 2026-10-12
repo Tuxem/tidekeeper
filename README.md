@@ -146,6 +146,14 @@ a plain TIDAL track URL. Retry those tracks later with:
 tidekeeper -l "/path/to/downloads/failed-tracks.txt"
 ```
 
+A track that appears in several playlists (or in a playlist and its album) is
+downloaded once. Tidekeeper records each downloaded track in
+`.tidekeeper-tracks.jsonl` in the download folder and, the next time the same
+TIDAL track is needed in another folder, hard-links the existing file there
+instead of downloading it again, so the copies share their disk space. On
+filesystems without hard links (FAT/exFAT, Android shared storage) the file is
+copied locally instead. Turn this off with **Link duplicate tracks** in settings.
+
 Legacy command:
 
 ```bash

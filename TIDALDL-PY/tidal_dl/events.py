@@ -222,6 +222,11 @@ def changeSettings():
         "CHANGE_SAVE_AS_FLAC",
         "Save FLAC streams as .flac files when ffmpeg can remux them('0'-No,'1'-Yes):",
     ))
+    SETTINGS.linkDuplicateTracks = Printf.enterBool(getattr(
+        LANG.select,
+        "CHANGE_LINK_DUPLICATE_TRACKS",
+        "Link tracks already downloaded elsewhere instead of downloading them again('0'-No,'1'-Yes):",
+    ))
     SETTINGS.language = Printf.enter(LANG.select.CHANGE_LANGUAGE + "(" + LANG.getLangChoicePrint() + "):")
     LANG.setLang(SETTINGS.language)
     syncPlaybackRateLimiter()

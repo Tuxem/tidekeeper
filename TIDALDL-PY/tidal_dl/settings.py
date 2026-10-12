@@ -42,6 +42,7 @@ class Settings(aigpy.model.ModelBase):
     downloadDelay = True
     requestIntervalSeconds = 3.0
     saveAsFlac = False
+    linkDuplicateTracks = True
 
     downloadPath = "./download/"
     audioQuality = AudioQuality.Max
@@ -154,6 +155,8 @@ class Settings(aigpy.model.ModelBase):
             self.requestIntervalSeconds = max(0.0, float(self.requestIntervalSeconds))
         if getattr(self, 'saveAsFlac', None) is None:
             self.saveAsFlac = False
+        if getattr(self, 'linkDuplicateTracks', None) is None:
+            self.linkDuplicateTracks = True
         if not hasSavedSettings:
             self.downloadPath = getDefaultDownloadPath()
             self.audioQuality = AudioQuality.Max

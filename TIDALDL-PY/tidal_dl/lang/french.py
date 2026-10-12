@@ -44,6 +44,7 @@ class LangFrench(object):
     SETTING_APIKEY = "Prise en charge de la clé API"
     SETTING_ADD_TYPE_FOLDER = "Ajouter un dossier de type"
     SETTING_DOWNLOAD_DELAY = "Use Download Delay"
+    SETTING_LINK_DUPLICATE_TRACKS = "Lier les morceaux en double"
 
     CHOICE = "CHOIX"
     FUNCTION = "FONCTION"
@@ -95,6 +96,7 @@ class LangFrench(object):
     CHANGE_ADD_TYPE_FOLDER = "Ajouter un dossier de type,Ex: Album/Video/Playlist('0'-Non,'1'-Oui):"
     CHANGE_MULITHREAD_DOWNLOAD = "Multi thread download('0'-Non,'1'-Oui):"
     CHANGE_USE_DOWNLOAD_DELAY = "Use Download Delay('0'-No,'1'-Yes):"
+    CHANGE_LINK_DUPLICATE_TRACKS = "Lier les morceaux déjà téléchargés ailleurs au lieu de les retélécharger('0'-Non,'1'-Oui):"
 
     # {} are required in these strings
     AUTH_START_LOGIN = "Démarrage du processus de connexion..."

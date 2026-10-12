@@ -355,6 +355,7 @@ class MainWindow(QMainWindow):
         self.checks = {}
         for key, label in (
             ("checkExist", "Skip existing files"),
+            ("linkDuplicateTracks", "Link duplicate tracks"),
             ("showProgress", "Show progress"),
             ("showTrackInfo", "Show track info"),
             ("includeEP", "Include EPs and singles"),
@@ -453,7 +454,7 @@ class MainWindow(QMainWindow):
         grid.setHorizontalSpacing(24)
         grid.setVerticalSpacing(6)
         groups = [
-            ("Files", ["checkExist", "saveCovers", "lyricFile", "saveAlbumInfo", "usePlaylistFolder"]),
+            ("Files", ["checkExist", "linkDuplicateTracks", "saveCovers", "lyricFile", "saveAlbumInfo", "usePlaylistFolder"]),
             ("Catalog", ["includeEP", "downloadVideos"]),
             ("Run behavior", ["multiThread", "downloadDelay", "saveAsFlac", "showProgress", "showTrackInfo"]),
         ]
