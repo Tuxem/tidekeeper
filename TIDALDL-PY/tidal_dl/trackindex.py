@@ -43,9 +43,20 @@ def __toStored__(root, path):
 
 
 def __fromStored__(root, stored):
-    if os.path.isabs(stored):
-        return stored
-    return os.path.join(__root__(root), *stored.split("/"))
+    """Return the path an index entry names, or None when it is not inside ``root``.
+
+    The index sits in the download folder, so it is not trusted: an entry
+    pointing elsewhere (absolute path, ``..``, a symlink out of the folder)
+    must never be linked or copied into the library.
+    """
+    path = stored if os.path.isabs(stored) else os.path.join(__root__(root), *stored.split("/"))
+    base = os.path.realpath(__root__(root))
+    try:
+        inside = os.path.commonpath([base, os.path.realpath(path)]) == base
+    except ValueError:
+        # Windows: another drive than the download folder.
+        inside = False
+    return path if inside else None
 
 
 def __load__(root):
@@ -83,7 +94,7 @@ def findTrackCopies(root, trackId):
     copies = []
     for stored, quality in known.items():
         path = __fromStored__(root, stored)
-        if aigpy.file.getSize(path) > 0:
+        if path is not None and aigpy.file.getSize(path) > 0:
             copies.append((path, quality))
     return copies
 

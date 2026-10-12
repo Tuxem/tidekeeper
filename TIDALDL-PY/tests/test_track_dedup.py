@@ -106,6 +106,24 @@ class TrackIndexTests(unittest.TestCase):
         self.assertEqual(trackindex.findTrackCopies(str(self.root), 456), [(str(path), "HIGH")])
         self.assertEqual(trackindex.findTrackCopies(str(self.root), 457), [])
 
+    def test_entries_pointing_outside_the_library_are_ignored(self):
+        outside = tempfile.NamedTemporaryFile(delete=False)
+        outside.write(b"secret")
+        outside.close()
+        self.addCleanup(os.unlink, outside.name)
+        inside = self._file("a.flac")
+        (self.root / "escape.flac").symlink_to(outside.name)
+        index = self.root / trackindex.TRACK_INDEX_FILE
+        index.write_text(
+            json.dumps({"id": 456, "path": outside.name}) + "\n"
+            + json.dumps({"id": 456, "path": "../" + os.path.basename(self.root) + "/../" + os.path.basename(outside.name)}) + "\n"
+            + json.dumps({"id": 456, "path": "escape.flac"}) + "\n"
+            + json.dumps({"id": 456, "path": "a.flac", "quality": "HIGH"}) + "\n",
+            encoding="utf-8",
+        )
+
+        self.assertEqual(trackindex.findTrackCopies(str(self.root), 456), [(str(inside), "HIGH")])
+
 
 class TrackDedupTests(unittest.TestCase):
     def setUp(self):
@@ -290,6 +308,25 @@ class TrackDedupTests(unittest.TestCase):
         self.assertFalse(os.path.samefile(first, second))
         self.assertIn("Artist - Track.flac (copied from existing copy)", self.messages)
         self.assertEqual(sorted(item.name for item in second.parent.iterdir()), ["Artist - Track.flac"])
+
+    @unittest.skipIf(os.name == "nt", "symlinks need privileges on Windows")
+    def test_copy_fallback_never_writes_through_a_link_planted_at_the_temporary_name(self):
+        first, second = self._path("One"), self._path("Two")
+        first.parent.mkdir(parents=True, exist_ok=True)
+        first.write_bytes(b"audio")
+        victim = self.root / "victim.txt"
+        victim.write_text("keep me", encoding="utf-8")
+        second.parent.mkdir(parents=True, exist_ok=True)
+        planted = Path(f"{second}.link.{os.getpid()}.{download.get_ident()}")
+        planted.symlink_to(victim)
+
+        with mock.patch.object(download, "__removeFile__"), \
+             mock.patch.object(download.os, "link", side_effect=OSError("Operation not permitted")):
+            with self.assertRaises(OSError):
+                download.__placeExistingCopy__(str(first), str(second))
+
+        self.assertEqual(victim.read_text(encoding="utf-8"), "keep me")
+        self.assertFalse(second.exists())
 
     def test_disabled_setting_downloads_again_and_writes_no_index(self):
         download.SETTINGS.linkDuplicateTracks = False

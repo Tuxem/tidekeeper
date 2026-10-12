@@ -228,6 +228,9 @@ def linkDuplicates(paths, dryRun=False):
 
     bySize = {}
     for path in sorted({os.path.abspath(path) for path in paths}):
+        # A symlink stands for a file elsewhere; replacing it would not free anything.
+        if os.path.islink(path):
+            continue
         size = aigpy.file.getSize(path)
         if size > 0:
             bySize.setdefault(size, []).append(path)

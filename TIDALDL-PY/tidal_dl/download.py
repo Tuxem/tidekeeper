@@ -473,6 +473,15 @@ def __rememberTrack__(track, path, quality=None):
         logging.warning("Unable to index track %s: %s", trackId, e)
 
 
+def __copyToNewFile__(source, target):
+    """Copy ``source`` to a ``target`` that must not exist, never following a link planted there."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    descriptor = os.open(target, flags, 0o666)
+    with os.fdopen(descriptor, "wb") as output, open(source, "rb") as origin:
+        shutil.copyfileobj(origin, output, 1024 * 1024)
+    shutil.copystat(source, target)
+
+
 def __placeExistingCopy__(source, target, allowCopy=True):
     """Hard-link ``source`` to ``target``; returns False when it had to be copied.
 
@@ -491,7 +500,7 @@ def __placeExistingCopy__(source, target, allowCopy=True):
         except (OSError, NotImplementedError, AttributeError):
             if not allowCopy:
                 raise
-            shutil.copy2(source, tempPath)
+            __copyToNewFile__(source, tempPath)
             linked = False
         os.replace(tempPath, target)
         return linked
