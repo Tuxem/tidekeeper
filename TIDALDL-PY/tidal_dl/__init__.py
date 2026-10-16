@@ -227,7 +227,7 @@ def mainCommand():
         for item in setlistAdd:
             try:
                 entry = addSetlist(item)
-                Printf.success(f"Registered setlist: {entry['title']} [{entry['uuid']}]")
+                Printf.success(f"Registered setlist: {entry.get('title') or 'folder'} [{entry['uuid']}]")
             except Exception as e:
                 Printf.err(f"{item}: {e}")
                 code = 1

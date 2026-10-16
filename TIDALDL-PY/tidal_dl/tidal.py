@@ -27,6 +27,8 @@ from .settings import *
 REQUEST_TIMEOUT = (5, 60)
 API_BASE_PRIMARY = 'https://api.tidal.com/v1/'
 API_BASE_LEGACY = 'https://api.tidalhifi.com/v1/'
+API_BASE_V2 = 'https://api.tidal.com/v2/'
+FOLDER_PAGE_SIZE = 50
 PLAYBACK_ASSET_NOT_READY_ATTEMPTS = 6
 RATE_LIMIT_MAX_ATTEMPTS = 3
 
@@ -519,6 +521,37 @@ class TidalAPI(object):
         for item in ret['items']:
             playlists.append(aigpy.model.dictToModel(item, Playlist()))
         return playlists
+
+    def getFolderPlaylists(self, folderId, _visited=None) -> list:
+        """Return ``[{"uuid", "title"}]`` for every playlist of one of your TIDAL folders, subfolders included."""
+        visited = set() if _visited is None else _visited
+        if folderId in visited:
+            return []
+        visited.add(folderId)
+        playlists, seen, offset = [], set(), 0
+        while True:
+            data = self.__get__('my-collection/playlists/folders',
+                                {'folderId': folderId, 'limit': FOLDER_PAGE_SIZE, 'offset': offset,
+                                 'order': 'NAME', 'orderDirection': 'ASC'}, API_BASE_V2)
+            items = data.get('items') or []
+            fresh = 0
+            for item in items:
+                content = item.get('data') or {}
+                trn = str(item.get('trn') or content.get('trn') or '').split(':')
+                kind = str(item.get('itemType') or content.get('itemType') or (trn[1] if len(trn) > 2 else '')).upper()
+                itemId = content.get('uuid') or content.get('id') or (trn[-1] if len(trn) > 2 else None)
+                if not itemId or (kind, itemId) in seen:
+                    continue
+                seen.add((kind, itemId))
+                fresh += 1
+                if kind == 'PLAYLIST':
+                    playlists.append({'uuid': str(itemId), 'title': content.get('title') or content.get('name')})
+                elif kind == 'FOLDER':
+                    playlists += self.getFolderPlaylists(str(itemId), visited)
+            # A short page is the last one; a page with nothing new means the server ignored the offset.
+            if len(items) < FOLDER_PAGE_SIZE or not fresh:
+                return playlists
+            offset += len(items)
 
     def getArtist(self, id) -> Artist:
         return aigpy.model.dictToModel(self.__get__('artists/' + str(id)), Artist())

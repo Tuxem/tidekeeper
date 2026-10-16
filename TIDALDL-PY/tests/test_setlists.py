@@ -11,6 +11,9 @@ from tidal_dl import setlists
 
 UUID_ONE = "11111111-1111-4111-8111-111111111111"
 UUID_TWO = "22222222-2222-4222-8222-222222222222"
+UUID_THREE = "44444444-4444-4444-8444-444444444444"
+FOLDER = "6f759548-c59e-4ce0-8032-71b00d6efd3c"
+FOLDER_URL = f"https://tidal.com/folder/{FOLDER}"
 
 
 class SetlistTests(unittest.TestCase):
@@ -19,7 +22,9 @@ class SetlistTests(unittest.TestCase):
         self.root = Path(self.temp_dir.name)
         self.titles = {UUID_ONE: "One", UUID_TWO: "Two"}
         self.messages = []
+        self.folders = {FOLDER: [{"uuid": UUID_ONE, "title": "One"}, {"uuid": UUID_TWO, "title": "Two"}]}
         patches = [
+            mock.patch.object(setlists.TIDAL_API, "getFolderPlaylists", side_effect=self._get_folder),
             mock.patch.object(setlists, "getSetlistsPath", return_value=str(self.root / "setlists.json")),
             mock.patch.object(setlists, "getSetlistsFilePath", return_value=str(self.root / "setlists.txt")),
             mock.patch.object(setlists.TIDAL_API, "getPlaylist", side_effect=self._get_playlist),
@@ -33,6 +38,11 @@ class SetlistTests(unittest.TestCase):
 
     def tearDown(self):
         self.temp_dir.cleanup()
+
+    def _get_folder(self, uuid):
+        if uuid not in self.folders:
+            raise Exception("HTTP 404 Folder not found")
+        return self.folders[uuid]
 
     def _get_playlist(self, uuid):
         if uuid not in self.titles:
@@ -224,6 +234,128 @@ class SetlistTests(unittest.TestCase):
         self.assertNotIn(f"[{UUID_ONE}] - from the list file", text)
         self.assertIn("List file, line 3", text)
 
+    def test_a_folder_url_is_told_apart_from_a_playlist(self):
+        self.assertEqual(setlists.parseSource(FOLDER_URL + "?u=1"), ("folder", FOLDER))
+        self.assertEqual(setlists.parseSource(f"https://tidal.com/browse/playlist/{UUID_ONE}"), ("playlist", UUID_ONE))
+        with self.assertRaises(ValueError):
+            setlists.parseSource("https://tidal.com/folder/not-a-uuid")
+
+    def test_sync_downloads_every_playlist_of_a_registered_folder(self):
+        entry = setlists.addSetlist(FOLDER_URL)
+        self.assertEqual(entry["kind"], "folder")
+        calls = []
+
+        with mock.patch.object(setlists, "start_playlist", side_effect=lambda p: calls.append(p.uuid) or True):
+            code = setlists.syncSetlists()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, [UUID_ONE, UUID_TWO])
+        self.assertEqual(setlists.loadSetlists()[0]["lastStatus"], "ok")
+        self.assertIn("2/2 setlists up to date", self.messages[-1])
+
+    def test_a_playlist_added_to_the_folder_is_picked_up_by_the_next_sync(self):
+        setlists.addSetlist(FOLDER_URL)
+        self.folders[FOLDER].append({"uuid": UUID_THREE, "title": "Three"})
+        self.titles[UUID_THREE] = "Three"
+        calls = []
+
+        with mock.patch.object(setlists, "start_playlist", side_effect=lambda p: calls.append(p.uuid) or True):
+            setlists.syncSetlists()
+
+        self.assertEqual(calls, [UUID_ONE, UUID_TWO, UUID_THREE])
+
+    def test_folder_in_the_list_file_skips_playlists_already_synced(self):
+        setlists.addSetlist(UUID_TWO)
+        self._write_list(FOLDER_URL)
+        calls = []
+
+        with mock.patch.object(setlists, "start_playlist", side_effect=lambda p: calls.append(p.uuid) or True):
+            code = setlists.syncSetlists()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(sorted(calls), [UUID_ONE, UUID_TWO])
+        self.assertEqual(len(calls), 2)
+
+    def test_a_broken_playlist_of_a_folder_fails_the_run_but_not_the_others(self):
+        setlists.addSetlist(FOLDER_URL)
+        del self.titles[UUID_ONE]
+        calls = []
+
+        with mock.patch.object(setlists, "start_playlist", side_effect=lambda p: calls.append(p.uuid) or True):
+            code = setlists.syncSetlists()
+
+        self.assertEqual((code, calls), (1, [UUID_TWO]))
+        self.assertEqual(setlists.loadSetlists()[0]["lastStatus"], "1 playlists failed")
+
+    def test_an_unreadable_or_empty_folder_fails_without_stopping_the_other_setlists(self):
+        self._write_list("https://tidal.com/folder/33333333-3333-4333-8333-333333333333",
+                         f"https://tidal.com/folder/{UUID_ONE}", UUID_TWO)
+        self.folders[UUID_ONE] = []
+        calls = []
+
+        with mock.patch.object(setlists, "start_playlist", side_effect=lambda p: calls.append(p.uuid) or True):
+            code = setlists.syncSetlists()
+
+        self.assertEqual((code, calls), (1, [UUID_TWO]))
+        self.assertIn("1/3 setlists up to date", self.messages[-1])
+
+    def test_remove_a_registered_folder_by_url(self):
+        setlists.addSetlist(FOLDER_URL)
+        setlists.removeSetlist(FOLDER_URL)
+        self.assertEqual(setlists.loadSetlists(), [])
+
+    def test_print_marks_folders(self):
+        setlists.addSetlist(FOLDER_URL)
+        setlists.printSetlists()
+        self.assertTrue(any(str(m).startswith(f"folder {FOLDER} [{FOLDER}]") for m in self.messages))
+
+
+class FolderListingTests(unittest.TestCase):
+    def _api(self, pages):
+        from tidal_dl.tidal import TidalAPI
+        api = TidalAPI()
+        calls = []
+
+        def fake_get(path, params=None, urlpre=None):
+            calls.append((path, dict(params), urlpre))
+            return pages(dict(params))
+        api.__get__ = fake_get
+        return api, calls
+
+    def test_lists_playlists_and_walks_into_subfolders(self):
+        data = {
+            "root": {"items": [
+                {"itemType": "PLAYLIST", "data": {"uuid": UUID_ONE, "title": "One"}},
+                {"itemType": "FOLDER", "data": {"id": "sub", "name": "Sub"}},
+            ]},
+            "sub": {"items": [
+                {"itemType": "PLAYLIST", "trn": f"trn:playlist:{UUID_TWO}", "data": {"title": "Two"}},
+                {"itemType": "FOLDER", "data": {"id": "root"}},  # a loop must not hang the sync
+            ]},
+        }
+        api, calls = self._api(lambda params: data[params["folderId"]])
+
+        self.assertEqual(api.getFolderPlaylists("root"),
+                         [{"uuid": UUID_ONE, "title": "One"}, {"uuid": UUID_TWO, "title": "Two"}])
+        self.assertEqual(calls[0][0], "my-collection/playlists/folders")
+        self.assertEqual(calls[0][2], "https://api.tidal.com/v2/")
+
+    def test_reads_every_page(self):
+        total = [{"itemType": "PLAYLIST", "data": {"uuid": f"{index:08d}-0000-4000-8000-000000000000", "title": str(index)}}
+                 for index in range(120)]
+        api, calls = self._api(lambda params: {"items": total[params["offset"]:params["offset"] + params["limit"]]})
+
+        self.assertEqual(len(api.getFolderPlaylists("root")), 120)
+        self.assertEqual([call[1]["offset"] for call in calls], [0, 50, 100])
+
+    def test_a_server_that_ignores_the_offset_does_not_loop_forever(self):
+        page = {"items": [{"itemType": "PLAYLIST", "data": {"uuid": f"{index:08d}-0000-4000-8000-000000000000"}}
+                          for index in range(50)]}
+        api, calls = self._api(lambda params: page)
+
+        self.assertEqual(len(api.getFolderPlaylists("root")), 50)
+        self.assertEqual(len(calls), 2)
+
 
 class ScheduleTests(unittest.TestCase):
     def setUp(self):
@@ -323,6 +455,22 @@ class SetlistCommandTests(unittest.TestCase):
         code, _, add, _, _ = self._run("--setlist-add", UUID_ONE, "--setlist-add", UUID_TWO)
         self.assertEqual(code, 0)
         self.assertEqual([call.args[0] for call in add.call_args_list], [UUID_ONE, UUID_TWO])
+
+    def test_add_a_folder_has_no_title_to_show(self):
+        old_argv = sys.argv
+        sys.argv = ["tidekeeper", "--setlist-add", FOLDER_URL]
+        try:
+            with mock.patch.object(tidal_dl, "loginByConfig", return_value=True), \
+                 mock.patch.object(tidal_dl.aigpy.path, "mkdirs", return_value=True), \
+                 mock.patch.object(tidal_dl, "addSetlist", return_value={"uuid": FOLDER}), \
+                 mock.patch.object(tidal_dl.Printf, "err") as err, \
+                 mock.patch.object(tidal_dl.Printf, "success") as success:
+                code = tidal_dl.mainCommand()
+        finally:
+            sys.argv = old_argv
+        self.assertEqual(code, 0)
+        err.assert_not_called()
+        self.assertIn(FOLDER, success.call_args.args[0])
 
     def test_sync_passes_the_list_file_through(self):
         code, sync, _, _, _ = self._run("--sync", "--setlist-file", "/tmp/my.txt")

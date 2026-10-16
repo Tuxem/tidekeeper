@@ -189,7 +189,13 @@ Setlists can also be kept in a plain text file, one playlist URL or id per line
 # ~/.tidal-dl.setlists.txt
 https://tidal.com/browse/playlist/<uuid>   # morning mix
 <uuid>
+https://tidal.com/folder/<uuid>            # every playlist of one of your TIDAL folders
 ```
+
+A folder URL (`tidal.com/folder/<uuid>`) works in the file and with `--setlist-add`:
+each sync looks the folder up again (subfolders included), so playlists you add to it
+later are downloaded too. Only your own folders can be read. A folder that cannot be
+read, or is empty, makes the run exit non-zero.
 
 `--sync` reads `~/.tidal-dl.setlists.txt` when it exists and syncs its playlists
 along with the registered ones (a playlist in both is synced once). Use

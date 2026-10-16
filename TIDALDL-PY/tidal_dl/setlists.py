@@ -5,7 +5,8 @@
 @Desc    :   A list of TIDAL playlists (setlists) to keep up to date: register
              them once (or write them one per line in a list file), then
              ``--sync`` downloads whatever is new in each one, and ``--schedule``
-             has cron run that every day.
+             has cron run that every day. A TIDAL folder stands for all the
+             playlists it holds, looked up again on every sync.
 '''
 import json
 import logging
@@ -16,6 +17,7 @@ import subprocess
 import sys
 import time
 from contextlib import contextmanager
+from urllib.parse import unquote, urlparse
 
 from .enums import Type
 from .events import start_playlist
@@ -84,16 +86,43 @@ def parsePlaylistId(text):
     raise ValueError(f"Not a TIDAL playlist URL or id: {text}")
 
 
+def parseFolderId(text):
+    """Return the folder UUID in a TIDAL folder URL (``tidal.com/folder/<uuid>``), or None."""
+    text = (text or "").strip()
+    if "tidal.com" not in text:
+        return None
+    parts = [unquote(part) for part in urlparse(text).path.split("/") if part]
+    for index in range(len(parts) - 1):
+        if parts[index].lower() == "folder" and UUID_PATTERN.match(parts[index + 1]):
+            return parts[index + 1]
+    return None
+
+
+def parseSource(text):
+    """Return ``("folder" | "playlist", uuid)`` for a TIDAL folder or playlist URL, or a bare playlist id."""
+    folderId = parseFolderId(text)
+    if folderId:
+        return "folder", folderId
+    return "playlist", parsePlaylistId(text)
+
+
 def addSetlist(text):
-    """Register a playlist (needs a login to check it exists and read its title)."""
-    uuid = parsePlaylistId(text)
-    playlist = TIDAL_API.getPlaylist(uuid)
+    """Register a playlist, or a folder of playlists (needs a login to check it exists)."""
+    kind, uuid = parseSource(text)
+    if kind == "folder":
+        title = None
+        TIDAL_API.getFolderPlaylists(uuid)
+    else:
+        title = TIDAL_API.getPlaylist(uuid).title
     items = loadSetlists()
     entry = next((item for item in items if item["uuid"] == uuid), None)
     if entry is None:
         entry = {"uuid": uuid, "added": __now__()}
+        if kind == "folder":
+            entry["kind"] = "folder"
         items.append(entry)
-    entry["title"] = playlist.title
+    if title:
+        entry["title"] = title
     saveSetlists(items)
     return entry
 
@@ -103,7 +132,7 @@ def removeSetlist(text):
     text = (text or "").strip()
     items = loadSetlists()
     try:
-        uuid = parsePlaylistId(text)
+        uuid = parseSource(text)[1]
     except ValueError:
         uuid = None
     matches = [item for item in items if item["uuid"] == uuid]
@@ -139,11 +168,11 @@ def readSetlistsFile(filePath=None):
 
 
 def __fileSetlists__(filePath=None):
-    """Return the playlist UUIDs of the list file and its unusable lines as ``(number, text, error)``."""
+    """Return the ``(number, kind, uuid)`` of the list file and its unusable lines as ``(number, text, error)``."""
     found, invalid = [], []
     for number, text in readSetlistsFile(filePath):
         try:
-            found.append((number, parsePlaylistId(text)))
+            found.append((number, *parseSource(text)))
         except ValueError as e:
             invalid.append((number, text, str(e)))
     return found, invalid
@@ -159,11 +188,12 @@ def printSetlists(filePath=None):
     for item in items:
         status = item.get("lastStatus")
         last = f"last sync {item['lastSync']}: {status}" if item.get("lastSync") else "never synced"
-        Printf.info(f"{item.get('title') or item['uuid']} [{item['uuid']}] - {last}")
+        label = "folder " if item.get("kind") == "folder" else ""
+        Printf.info(f"{label}{item.get('title') or item['uuid']} [{item['uuid']}] - {last}")
     registered = {item["uuid"].lower() for item in items}
-    for number, uuid in found:
+    for number, kind, uuid in found:
         if uuid.lower() not in registered:
-            Printf.info(f"[{uuid}] - from the list file, line {number}")
+            Printf.info(f"{'folder ' if kind == 'folder' else ''}[{uuid}] - from the list file, line {number}")
     for number, text, error in invalid:
         Printf.err(f"List file, line {number}: {error}")
     return items
@@ -194,21 +224,38 @@ def __syncLock__():
 
 
 def __syncTargets__(filePath=None):
-    """Return the setlists to sync and the number of unusable list file lines.
+    """Return the playlists and folders to sync and the number of unusable list file lines.
 
-    The registered setlists come first, then the ones that only appear in the
+    The registered ones come first, then the ones that only appear in the
     list file. Only registered ones keep their last sync outcome.
     """
-    targets = [{"uuid": item["uuid"], "title": item.get("title"), "registered": True} for item in loadSetlists()]
+    targets = [{"uuid": item["uuid"], "title": item.get("title"), "registered": True,
+                "kind": item.get("kind", "playlist")} for item in loadSetlists()]
     known = {target["uuid"].lower() for target in targets}
     found, invalid = __fileSetlists__(filePath)
-    for number, uuid in found:
+    for number, kind, uuid in found:
         if uuid.lower() not in known:
             known.add(uuid.lower())
-            targets.append({"uuid": uuid, "title": None, "registered": False})
+            targets.append({"uuid": uuid, "title": None, "registered": False, "kind": kind})
     for number, text, error in invalid:
         Printf.err(f"List file, line {number}: {error}")
     return targets, len(invalid)
+
+
+def __syncPlaylist__(uuid, title, registered):
+    """Download what is new in one playlist; returns ``(ok, status)`` and never raises."""
+    title = title or uuid
+    try:
+        playlist = TIDAL_API.getPlaylist(uuid)
+        ok = start_playlist(playlist) is not False
+        status = "ok" if ok else "some tracks failed (see failed-tracks.txt)"
+        if playlist.title and registered:
+            __updateSetlist__(uuid, title=playlist.title)
+    except Exception as e:
+        ok = False
+        status = f"failed: {e}"
+        Printf.err(f"{title}: {e}")
+    return ok, status
 
 
 def syncSetlists(filePath=None):
@@ -231,30 +278,46 @@ def syncSetlists(filePath=None):
         oldProgress = SETTINGS.showProgress
         if not sys.stdout.isatty():
             SETTINGS.showProgress = False
-        failed = invalidLines
+        total, failed = 0, 0
+        # A playlist named on its own is synced where it stands; a folder skips it, and any it already did.
+        done = {target["uuid"].lower() for target in targets if target["kind"] != "folder"}
         try:
             Printf.info(f"Sync started {__now__()}: {len(targets)} setlists")
             for target in targets:
                 title = target["title"] or target["uuid"]
-                try:
-                    playlist = TIDAL_API.getPlaylist(target["uuid"])
-                    ok = start_playlist(playlist) is not False
-                    status = "ok" if ok else "some tracks failed (see failed-tracks.txt)"
-                    if playlist.title:
-                        title = playlist.title
-                        if target["registered"]:
-                            __updateSetlist__(target["uuid"], title=title)
-                except Exception as e:
-                    ok = False
-                    status = f"failed: {e}"
-                    Printf.err(f"{title}: {e}")
+                if target["kind"] == "folder":
+                    try:
+                        members = TIDAL_API.getFolderPlaylists(target["uuid"])
+                        if not members:
+                            # Better a loud failure than a silent "up to date" if TIDAL's reply was not understood.
+                            raise ValueError("no playlist found in it")
+                    except Exception as e:
+                        total += 1
+                        failed += 1
+                        status = f"failed: {e}"
+                        Printf.err(f"Folder {title}: {e}")
+                    else:
+                        members = [member for member in members if member["uuid"].lower() not in done]
+                        done.update(member["uuid"].lower() for member in members)
+                        Printf.info(f"Folder {title}: {len(members)} playlists to sync")
+                        results = [__syncPlaylist__(member["uuid"], member["title"], False)[0] for member in members]
+                        total += len(results)
+                        bad = results.count(False)
+                        failed += bad
+                        status = "ok" if not bad else f"{bad} playlists failed"
+                    if target["registered"]:
+                        __updateSetlist__(target["uuid"], lastSync=__now__(), lastStatus=status)
+                    continue
+                ok, status = __syncPlaylist__(target["uuid"], target["title"], target["registered"])
+                total += 1
+                failed += 0 if ok else 1
                 if target["registered"]:
                     __updateSetlist__(target["uuid"], lastSync=__now__(), lastStatus=status)
-                failed += 0 if ok else 1
         finally:
             SETTINGS.showProgress = oldProgress
 
-    summary = f"Sync finished {__now__()}: {len(targets) - failed + invalidLines}/{len(targets)} setlists up to date"
+    summary = f"Sync finished {__now__()}: {total - failed}/{total} setlists up to date"
+    failed += invalidLines
     (Printf.success if not failed else Printf.err)(summary)
     return 1 if failed else 0
 
